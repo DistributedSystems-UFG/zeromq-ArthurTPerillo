@@ -1,37 +1,87 @@
-import multiprocessing #-
-import zmq, time, pickle, sys, random #-
-#-
-NWORKERS = 10 #-
-#-
-def producer():
-  context = zmq.Context()              
-  socket  = context.socket(zmq.PUSH)      # create a push socket
-  socket.bind("tcp://127.0.0.1:12345")    # bind socket to address
-  
-  while True:
-    workload = random.randint(1, 100)     # compute workload
-    print("Produced workload", format(workload,'03d')) #-
-    socket.send(pickle.dumps(workload))   # send workload to worker
-    time.sleep(workload/NWORKERS)         # balance production by waiting 
+import zmq, pickle, sys
+from constPipe import IP_MID, PORT2
+from collections import defaultdict
 
-def worker(id):
-  context = zmq.Context()
-  socket  = context.socket(zmq.PULL)      # create a pull socket
-  socket.connect("tcp://localhost:12345") # connect to the producer
-  thisworker = format(id,'03d') #-
+#  Formatação de saída 
 
-  while True:
-    print("Worker " + thisworker + " wants work") #-    
-    work = pickle.loads(socket.recv())     # receive work from a source
-    print("Worker " + thisworker + " gets   " + format(work,'03d')) #-
-    time.sleep(work)                       # pretend to work
-    
-if __name__ == "__main__": #-
-  s = multiprocessing.Process(target=producer) #-
-  w = [multiprocessing.Process(target=worker,args=(i+1,)) for i in range(NWORKERS)]#-
-#-
-  for i in range(NWORKERS): w[i].start() #-
-  s.start() #-
-  time.sleep(60) #-
-  for i in range(NWORKERS): w[i].terminate() #-
-  s.terminate() #-
+SEPARATOR = "-" * 62
+
+def print_result(item: dict, count: int):
+    print(
+        f"  #{count:04d} | "
+        f"{item['type']:<7} | "
+        f"{item['original']:>8.2f} {item['unit_in']:<4} "
+        f"->  {item['converted']:>9.4f} {item['unit_out']:<3} "
+        f"  [{item['worker']}]"
+    )
+
+def print_stats(stats: dict, total: int):
+    print(f"\n{'='*62}")
+    print(f"  ESTATISTICAS FINAIS  ({total} medicoes processadas)")
+    print(f"{'='*62}")
+    for mtype, data in stats.items():
+        avg = data["sum"] / data["count"]
+        print(
+            f"  {mtype:<7}  "
+            f"  n={data['count']:>4}  "
+            f"  media={avg:>9.4f} {data['unit_out']}"
+            f"  min={data['min']:>9.4f}  max={data['max']:>9.4f}"
+        )
+    print(f"{'='*62}\n")
+
+
+#  Consumer principal 
+
+def run_sink():
+    context = zmq.Context()
+    socket  = context.socket(zmq.PULL)              # socket de recepção
+    addr    = f"tcp://{IP_MID}:{PORT2}"
+    socket.connect(addr)                            # conecta ao middleware
+
+    print(f"[SINK] Conectado ao Middleware em {addr}")
+    print(f"[SINK] Aguardando dados convertidos…\n")
+    print(SEPARATOR)
+
+    # Acumula estatísticas por tipo
+    stats   = defaultdict(lambda: {"count": 0, "sum": 0.0,
+                                   "min": float("inf"), "max": float("-inf"),
+                                   "unit_out": ""})
+    total   = 0
+
+    try:
+        while True:
+            if not socket.poll(3000):               # timeout 3 s
+                print("[SINK] Aguardando…")
+                continue
+
+            raw  = socket.recv()
+            item = pickle.loads(raw)
+
+            if item.get("type") == "STOP":
+                print(f"\n[SINK] Sinal de STOP recebido.")
+                break
+
+            total += 1
+            print_result(item, total)
+
+            # Atualiza estatísticas
+            mtype = item["type"]
+            v     = item["converted"]
+            s     = stats[mtype]
+            s["count"]    += 1
+            s["sum"]      += v
+            s["unit_out"]  = item["unit_out"]
+            s["min"]       = min(s["min"], v)
+            s["max"]       = max(s["max"], v)
+
+    except KeyboardInterrupt:
+        print("\n[SINK] Interrompido pelo usuário.")
+    finally:
+        print_stats(stats, total)
+        socket.close()
+        context.term()
+        print("[SINK] Encerrado.")
+
+
+if __name__ == "__main__":
+    run_sink()
