@@ -1,4 +1,7 @@
-SRC1  = "98.90.53.6"
-SRC2  = "98.94.46.36"
-PORT1 = "5678"
-PORT2 = "5679"
+IP_SRC  = "0.0.0.0"   # IP da Máquina A (Producer)
+IP_MID  = "0.0.0.0"   # IP da Máquina B (Middleware)
+
+PORT1   = "5678"            # Comunicação: Producer  → Middleware
+PORT2   = "5679"            # Comunicação: Middleware → Consumer
+
+MEASURE_TYPES = ["temp", "weight", "dist", "length"]
